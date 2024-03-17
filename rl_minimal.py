@@ -40,3 +40,6 @@ replay_buffer = TFUniformReplayBuffer (
 # Notice that, in the sample code, they put this in a list.  I am waiting,
 #    to be clearer that a list is required as an arg later.
 observer = replay_buffer.add_batch
+
+# 5. Policy
+collect_policy = agent.collect_policy
