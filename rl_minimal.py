@@ -9,6 +9,7 @@ from tf_agents.environments import suite_gym
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.agents import DqnAgent
+from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 import tensorflow.keras.optimizers.legacy as optimizers
 
 # 1. Environment
@@ -26,4 +27,11 @@ agent = DqnAgent(
     tf_env.action_spec(),
     q_network = model,
     optimizer = optimizers.Adam(learning_rate = 0.001)
+)
+
+# 3. Replay Buffer
+replay_buffer = TFUniformReplayBuffer (
+    agent.collect_data_spec,
+    batch_size = 32, # Wild guess
+    max_length = 1000, # Following example
 )
