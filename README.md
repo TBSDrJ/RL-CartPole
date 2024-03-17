@@ -18,7 +18,7 @@ in the form of an agent who actions are being trained.
 provides the feed of actions to the model, and can also store the actions so
 the programmer can view the actions.
     4. Observer: This collects actions from the replay buffer and feeds them
-to the driver.
+to the driver.  This should be the name of a callable (not a call).
     5. Policy: This is function that actually makes the decisions for the
 agent.
     6. Driver: This connects the replay buffer/observer and the policy to the 
