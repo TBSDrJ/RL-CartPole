@@ -2,7 +2,7 @@
 
 I am trying to build a minimal reinforcement learning example, solving the cartpole problem.
 
-I started with [Training a Deep Q Network](https://www.tensorflow.org/agents/tutorials/1_dqn_tutorial), but that is pretty far from minimal, and I was struggling to minimize it.
+I started with [Training a Deep Q Network](https://www.tensorflow.org/agents/tutorials/1_dqn_tutorial), but that is pretty far from minimal, and I was struggling to minimize it.  In particular, it uses Reverb, which is only available on Linux.
 
 Then, in the process of trying to understand how to minimize it, I found this example: [Replay Buffers: Using replay buffers during training](https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#using_replay_buffers_during_training).
 
@@ -23,3 +23,5 @@ to the driver.  This should be the name of a callable (not a call).
 agent.
     6. Driver: This connects the replay buffer/observer and the policy to the 
 agent.
+    7. Dataset: This is the actual input into the model.  It is created from 
+the replay buffer.
