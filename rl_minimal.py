@@ -4,13 +4,16 @@ Dr. J, March 2024
 Minimal Reinforcement Learning example, following
 https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#using_replay_buffers_during_training
 """
-
+import random
+import tensorflow as tf
+import numpy as np
 from tf_agents.environments import suite_gym
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.agents import DqnAgent
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
 from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
+from tf_agents import trajectories
 import tensorflow.keras.optimizers.legacy as optimizers
 
 # 1. Environment
@@ -31,6 +34,9 @@ agent = DqnAgent(
 )
 
 # 3. Replay Buffer
+# The first argument here is a description of the required format for the
+#    description of one step of the agent in the environment. The pre-built
+#    environments have an attribute that contains that information for us.
 replay_buffer = TFUniformReplayBuffer (
     agent.collect_data_spec,
     batch_size = 32, # Wild guess
@@ -62,5 +68,68 @@ dataset = replay_buffer.as_dataset(
     single_deterministic_pass = False, # following warning
 )
 
+# Gotta get the iterator started with an initial batch. Because we don't have
+#    reverb, there doesn't seem to be a convenience function to produce
+#    batches for us. So, we have to build it from the ground up, which is 
+#    never easy.
+# So, a batch always has to be in a specific format. The pre-built environments
+#    come with attributes that describe the 'data_spec' of the environment,
+#    which includes a listing of the inputs and what format they are in.  There
+#    are ___Spec objects in tf to represent these descriptions as Python
+#    objects and to facilitate assertion-based type checking.
+# Notice that, in 3. above, we set up the Replay Buffer to require the spec
+#    agent.collect_data_spec.  So, print this out so we can see the format.
+print(agent.collect_data_spec)
+# Strangely, agent.collect_data_spec is not actually a ___Spec object, it is 
+#    Trajectory object with several ___Spec objects inside it.
+# There are 7 fields in the agent.collect_data_spec. The first 2 come from   
+#    the state of the environment *before* the action is taken, the last 3  
+#    come from the state of the environment *after* the action is taken.
+#    c.f. https://www.tensorflow.org/agents/api_docs/python/tf_agents/trajectories/Trajectory
+
+# So, building up the object:
+# tf_env.reset() shows the state of the environment before.
+print(tf_env.reset())
+# tf_env.step(1) shows the state of the environment after, using action=1.
+print(tf_env.step(1))
+# Arg 1: step_type: this is a class variable that is just an enumerated 
+#    type with 3 possible values: 0 = FIRST, 1 = MID, 2 = LAST. But 0 is
+#    not an int, it's an np.ndarray, so use the class variable.  I find
+#    it surprising that this is a numpy array and not a tf tensor, but a
+#    a tf tensor is just a wrapper around a numpy array so it's not a
+#    big difference anyway.
+# Arg 2: observation: This comes directly out of the environment as-is,
+#    using the environment state from before the action.
+# Arg 3: action: In cartpole, this is either 0 (left) or 1 (right). However,
+#    we have to submit a tf tensor, using a data type recognizable by tf.
+#    The spec calls for a one-dimensional, length 1 tensor of type int64.
+# Arg 4: policy_info, I'm leaving this as an empty tuple for now because
+#    this will build with that in there, and I'm not sure what the data 
+#    type of the object actually is -- the docs refer to it as 'an
+#    arbitrary nest.' There is a tf.nest submodule, it seems to be a tf
+#    adaptation of a dictionary, but I'm not sure of the details yet.
+# Arg 5: next_step_type: same as 1, but this is after the first action is
+#    taken, so we go from FIRST before to MID here.
+# Arg 6: reward: This comes directly out of the environment as-is,
+#    using the environment state from after the action.
+# Arg 7: discount: Similar to reward.
+before = tf_env.reset()
+action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
+after = tf_env.step(action)
+traj = trajectories.Trajectory(
+    trajectories.StepType.FIRST,
+    before.observation,
+    action,
+    (),
+    trajectories.StepType.MID,
+    after.reward,
+    after.discount,
+)
+print(traj)
+
 # This iterator produces batches of data as the network trains.
 iterator = iter(dataset)
+
+# for _ in range(10):
+    # trajectories = next(iterator)
+    # loss = agent.train(experience = trajectories)
