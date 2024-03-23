@@ -64,17 +64,15 @@ driver = DynamicStepDriver(
     num_steps = 10, # Following example, not sure why/how to pick
 )
 
-# 7. Dataset
-dataset = replay_buffer.as_dataset(
-    sample_batch_size = 32, # Matching value chosen earlier
-    num_steps = 2, # See README
-    single_deterministic_pass = False, # following warning
-)
-
-# Gotta get the iterator started with an initial batch. Because we don't have
-#    reverb, there doesn't seem to be a convenience function to produce
-#    batches for us. So, we have to build it from the ground up, which is 
-#    never easy.
+# Gotta get the iterator started with two initial batches. Why two? All the 
+#    examples I see with the cartpole problem use num_steps=2 when building
+#    the dataset from the replay buffer.  As far as I can tell, that's because 
+#    that's how many steps are needed for the training process, you just need 
+#    to see what the state is before and after one action to decide if you've 
+#    made a good move or a bad move.
+# Because we don't have reverb, there doesn't seem to be a convenience
+#    function to produce batches for us. So, we have to build it from the
+#    ground up, which is never easy.
 # So, a batch always has to be in a specific format. The pre-built environments
 #    come with attributes that describe the 'data_spec' of the environment,
 #    which includes a listing of the inputs and what format they are in.  There
@@ -115,7 +113,7 @@ dataset = replay_buffer.as_dataset(
 # Arg 7: discount: Similar to reward.
 before = tf_env.reset()
 action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
-after = tf_env.step(action)
+after_1 = tf_env.step(action)
 # Four of these got a tf.reshape() applied to them. Coming out of the 
 #    environment, they were represented as 1-dimensional tensors with
 #    length of 1, except the observation, which was a 2-d tensor of
@@ -129,32 +127,60 @@ after = tf_env.step(action)
 #    It's possible that I could have rebuilt the TensorSpec arguments in the
 #    agent.collect_data_spec to include that dimenstion, but I don't know if
 #    that would have caused other problems elsewhere.
-# print(action.shape)
-# print(tf.reshape(action, ()).shape)
-# print(before.observation.shape)
-# print(tf.reshape(before.observation, (4)).shape)
-traj = trajectories.Trajectory(
+# Also note: When I tried to submit a single trajectory as a batch, with no
+#    batch dimension, I needed to make the StepTypes into 1-d tensors, because
+#    right now they are 0-d np.ndarrays.
+# print(action)
+# print(tf.reshape(action, ()))
+# print(before.observation)
+# print(tf.reshape(before.observation, (4)))
+traj_1 = trajectories.Trajectory(
     trajectories.StepType.FIRST,
     tf.reshape(before.observation, (4)),
     tf.reshape(action, ()),
     (),
     trajectories.StepType.MID,
-    tf.reshape(after.reward, ()),
-    tf.reshape(after.discount, ()),
+    tf.reshape(after_1.reward, ()),
+    tf.reshape(after_1.discount, ()),
 )
-# print(traj)
+print(traj_1)
 # c.f. https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#writing_to_the_buffer
-batch = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj)
-# print(batch)
+batch_1 = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj_1)
+# print(batch_1)
 # print(agent.collect_data_spec)
-replay_buffer.add_batch(batch)
+replay_buffer.add_batch(batch_1)
+
+action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
+after_2 = tf_env.step(action)
+traj_2 = trajectories.Trajectory(
+    trajectories.StepType.MID,
+    tf.reshape(after_1.observation, (4)),
+    tf.reshape(action, ()),
+    (),
+    trajectories.StepType.MID,
+    tf.reshape(after_2.reward, ()),
+    tf.reshape(after_2.discount, ()),
+)
+print(traj_2)
+batch_2 = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj_2)
+replay_buffer.add_batch(batch_1)
+
+# 7. Dataset
+dataset = replay_buffer.as_dataset(
+    sample_batch_size = 32, # Matching value chosen earlier
+    num_steps = 2, 
+    single_deterministic_pass = False, # following warning
+)
 
 # This iterator produces batches of data as the network trains.
 iterator = iter(dataset)
 
-# So, now, after all that jazz, we have one batch that has no decision-making
-#    policy.
+# So, now, after all that jazz, we have two batches that have no 
+#    decision-making policy. But we also know a lot more about how to 
+#    make batches.  That means that the next() function can finally be 
+#    called without throwing an error!
+trajectories = next(iterator)
+print(trajectories)
 
-for _ in range(10):
-    trajectories = next(iterator)
-    loss = agent.train(experience = trajectories)
+# for _ in range(10):
+
