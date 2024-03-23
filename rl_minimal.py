@@ -16,6 +16,9 @@ from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
 from tf_agents import trajectories
 import tensorflow.keras.optimizers.legacy as optimizers
 
+# Supress Warnings
+tf.get_logger().setLevel('ERROR')
+
 # 1. Environment
 py_env = suite_gym.load('CartPole-v0')
 tf_env = TFPyEnvironment(py_env)
