@@ -10,6 +10,7 @@ from tf_agents.environments.tf_py_environment import TFPyEnvironment
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.agents import DqnAgent
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
+from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
 import tensorflow.keras.optimizers.legacy as optimizers
 
 # 1. Environment
@@ -43,3 +44,23 @@ observer = replay_buffer.add_batch
 
 # 5. Policy
 collect_policy = agent.collect_policy
+
+# 6. Driver
+# This driver is not the same as the Deep Q tutorial, this one seems simpler
+#    than the PyDriver used there.
+driver = DynamicStepDriver(
+    tf_env,
+    collect_policy,
+    observers = [observer],
+    num_steps = 10, # Following example, not sure why/how to pick
+)
+
+# 7. Dataset
+dataset = replay_buffer.as_dataset(
+    sample_batch_size = 32, # Matching value chosen earlier
+    num_steps = 2, # See README
+    single_deterministic_pass = False, # following warning
+)
+
+# This iterator produces batches of data as the network trains.
+iterator = iter(dataset)
