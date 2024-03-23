@@ -79,7 +79,7 @@ dataset = replay_buffer.as_dataset(
 #    objects and to facilitate assertion-based type checking.
 # Notice that, in 3. above, we set up the Replay Buffer to require the spec
 #    agent.collect_data_spec.  So, print this out so we can see the format.
-print(agent.collect_data_spec)
+# print(agent.collect_data_spec)
 # Strangely, agent.collect_data_spec is not actually a ___Spec object, it is 
 #    Trajectory object with several ___Spec objects inside it.
 # There are 7 fields in the agent.collect_data_spec. The first 2 come from   
@@ -89,15 +89,12 @@ print(agent.collect_data_spec)
 
 # So, building up the object:
 # tf_env.reset() shows the state of the environment before.
-print(tf_env.reset())
+# print(tf_env.reset())
 # tf_env.step(1) shows the state of the environment after, using action=1.
-print(tf_env.step(1))
+# print(tf_env.step(1))
 # Arg 1: step_type: this is a class variable that is just an enumerated 
 #    type with 3 possible values: 0 = FIRST, 1 = MID, 2 = LAST. But 0 is
-#    not an int, it's an np.ndarray, so use the class variable.  I find
-#    it surprising that this is a numpy array and not a tf tensor, but a
-#    a tf tensor is just a wrapper around a numpy array so it's not a
-#    big difference anyway.
+#    not an int, it's an np.ndarray, so use the class variable. 
 # Arg 2: observation: This comes directly out of the environment as-is,
 #    using the environment state from before the action.
 # Arg 3: action: In cartpole, this is either 0 (left) or 1 (right). However,
@@ -116,20 +113,45 @@ print(tf_env.step(1))
 before = tf_env.reset()
 action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
 after = tf_env.step(action)
+# Four of these got a tf.reshape() applied to them. Coming out of the 
+#    environment, they were represented as 1-dimensional tensors with
+#    length of 1, except the observation, which was a 2-d tensor of
+#    shape (1, 4), so it also had an extra dimension more than needed.
+#    If I submitted a single trajectory as a batch, this was great,
+#    and the build went through because it treated this dim as the 
+#    batch dimension.  But, when I tried to build a batch, this acted like
+#    a second batch dimension, which doesn't make sense, so it caused a
+#    crash. So, I needed to remove a dimension, making them into 0-dim tensors
+#    instead, then the batch dimension is the only dimension provided.
+#    It's possible that I could have rebuilt the TensorSpec arguments in the
+#    agent.collect_data_spec to include that dimenstion, but I don't know if
+#    that would have caused other problems elsewhere.
+# print(action.shape)
+# print(tf.reshape(action, ()).shape)
+# print(before.observation.shape)
+# print(tf.reshape(before.observation, (4)).shape)
 traj = trajectories.Trajectory(
     trajectories.StepType.FIRST,
-    before.observation,
-    action,
+    tf.reshape(before.observation, (4)),
+    tf.reshape(action, ()),
     (),
     trajectories.StepType.MID,
-    after.reward,
-    after.discount,
+    tf.reshape(after.reward, ()),
+    tf.reshape(after.discount, ()),
 )
-print(traj)
+# print(traj)
+# c.f. https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#writing_to_the_buffer
+batch = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj)
+# print(batch)
+# print(agent.collect_data_spec)
+replay_buffer.add_batch(batch)
 
 # This iterator produces batches of data as the network trains.
 iterator = iter(dataset)
 
-# for _ in range(10):
-    # trajectories = next(iterator)
-    # loss = agent.train(experience = trajectories)
+# So, now, after all that jazz, we have one batch that has no decision-making
+#    policy.
+
+for _ in range(10):
+    trajectories = next(iterator)
+    loss = agent.train(experience = trajectories)
