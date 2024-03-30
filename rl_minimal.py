@@ -7,14 +7,40 @@ https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#using_repl
 import random
 import tensorflow as tf
 import numpy as np
+import cv2
+import PIL
 from tf_agents.environments import suite_gym
 from tf_agents.environments.tf_py_environment import TFPyEnvironment
+from tf_agents.utils import common
 from tf_agents.networks.q_network import QNetwork
 from tf_agents.agents import DqnAgent
 from tf_agents.replay_buffers.tf_uniform_replay_buffer import TFUniformReplayBuffer
+from tf_agents.policies.q_policy import QPolicy
 from tf_agents.drivers.dynamic_step_driver import DynamicStepDriver
 from tf_agents import trajectories
 import tensorflow.keras.optimizers.legacy as optimizers
+
+def compute_avg_return(
+        env: TFPyEnvironment,
+        pol: QPolicy,
+        num_episodes: int = 20,
+) -> np.float32:
+    """Runs episodes, calculates return.  Max return in CartPole-v0 is 200."""
+    total_return = 0.0
+    for _ in range(num_episodes):
+        episode_ret = 0.0
+        time_step = env.reset()
+        while not time_step.is_last():
+            action_step = pol.action(time_step)
+            time_step = env.step(action_step.action)
+            episode_ret += time_step.reward
+        total_return += episode_ret
+    if num_episodes > 0:
+        avg_return = total_return / num_episodes
+        return avg_return.numpy()[0]
+    else:
+        return None
+
 
 # Supress Warnings
 tf.get_logger().setLevel('ERROR')
@@ -22,28 +48,37 @@ tf.get_logger().setLevel('ERROR')
 # 1. Environment
 py_env = suite_gym.load('CartPole-v0')
 tf_env = TFPyEnvironment(py_env)
+py_env_2 = suite_gym.load('CartPole-v0')
+eval_env = TFPyEnvironment(py_env_2)
 
 # 2. Network/Model/Agent
 model = QNetwork(
-    tf_env.time_step_spec().observation,
+    tf_env.observation_spec(),
     tf_env.action_spec(),
-    fc_layer_params = (100, 50), # This is what is used in the larger Deep Q ex
+    fc_layer_params = (100, 50),
+    # dropout_layer_params = (0.9, 0.7, 0.5),
 )
+# lr = tf.keras.optimizers.schedules.ExponentialDecay(0.001, 25000, 0.1)
+lr = 0.001
+train_counter = tf.Variable(0)
 agent = DqnAgent(
     tf_env.time_step_spec(),
     tf_env.action_spec(),
     q_network = model,
-    optimizer = optimizers.Adam(learning_rate = 0.001)
+    optimizer = optimizers.Adam(learning_rate = lr),
+    td_errors_loss_fn=tf.keras.losses.MeanSquaredError(),
+    train_step_counter = train_counter,
 )
+agent.initialize()
 
 # 3. Replay Buffer
 # The first argument here is a description of the required format for the
 #    description of one step of the agent in the environment. The pre-built
 #    environments have an attribute that contains that information for us.
 replay_buffer = TFUniformReplayBuffer (
-    agent.collect_data_spec,
-    batch_size = 32, # Wild guess
-    max_length = 1000, # Following example
+    data_spec = agent.collect_data_spec,
+    batch_size = 64,
+    max_length = 100000, 
 )
 
 # 4. Observer
@@ -52,135 +87,124 @@ replay_buffer = TFUniformReplayBuffer (
 observer = replay_buffer.add_batch
 
 # 5. Policy
+eval_policy = agent.policy
 collect_policy = agent.collect_policy
+# q_policy = QPolicy(
+#     tf_env.time_step_spec(),
+#     tf_env.action_spec(),
+#     q_network = model,
+# )
 
 # 6. Driver
 # This driver is not the same as the Deep Q tutorial, this one seems simpler
 #    than the PyDriver used there.
-driver = DynamicStepDriver(
-    tf_env,
-    collect_policy,
-    observers = [observer],
-    num_steps = 10, # Following example, not sure why/how to pick
-)
-
-# Gotta get the iterator started with two initial batches. Why two? All the 
-#    examples I see with the cartpole problem use num_steps=2 when building
-#    the dataset from the replay buffer.  As far as I can tell, that's because 
-#    that's how many steps are needed for the training process, you just need 
-#    to see what the state is before and after one action to decide if you've 
-#    made a good move or a bad move.
-# Because we don't have reverb, there doesn't seem to be a convenience
-#    function to produce batches for us. So, we have to build it from the
-#    ground up, which is never easy.
-# So, a batch always has to be in a specific format. The pre-built environments
-#    come with attributes that describe the 'data_spec' of the environment,
-#    which includes a listing of the inputs and what format they are in.  There
-#    are ___Spec objects in tf to represent these descriptions as Python
-#    objects and to facilitate assertion-based type checking.
-# Notice that, in 3. above, we set up the Replay Buffer to require the spec
-#    agent.collect_data_spec.  So, print this out so we can see the format.
-# print(agent.collect_data_spec)
-# Strangely, agent.collect_data_spec is not actually a ___Spec object, it is 
-#    Trajectory object with several ___Spec objects inside it.
-# There are 7 fields in the agent.collect_data_spec. The first 2 come from   
-#    the state of the environment *before* the action is taken, the last 3  
-#    come from the state of the environment *after* the action is taken.
-#    c.f. https://www.tensorflow.org/agents/api_docs/python/tf_agents/trajectories/Trajectory
-
-# So, building up the object:
-# tf_env.reset() shows the state of the environment before.
-# print(tf_env.reset())
-# tf_env.step(1) shows the state of the environment after, using action=1.
-# print(tf_env.step(1))
-# Arg 1: step_type: this is a class variable that is just an enumerated 
-#    type with 3 possible values: 0 = FIRST, 1 = MID, 2 = LAST. But 0 is
-#    not an int, it's an np.ndarray, so use the class variable. 
-# Arg 2: observation: This comes directly out of the environment as-is,
-#    using the environment state from before the action.
-# Arg 3: action: In cartpole, this is either 0 (left) or 1 (right). However,
-#    we have to submit a tf tensor, using a data type recognizable by tf.
-#    The spec calls for a one-dimensional, length 1 tensor of type int64.
-# Arg 4: policy_info, I'm leaving this as an empty tuple for now because
-#    this will build with that in there, and I'm not sure what the data 
-#    type of the object actually is -- the docs refer to it as 'an
-#    arbitrary nest.' There is a tf.nest submodule, it seems to be a tf
-#    adaptation of a dictionary, but I'm not sure of the details yet.
-# Arg 5: next_step_type: same as 1, but this is after the first action is
-#    taken, so we go from FIRST before to MID here.
-# Arg 6: reward: This comes directly out of the environment as-is,
-#    using the environment state from after the action.
-# Arg 7: discount: Similar to reward.
-before = tf_env.reset()
-action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
-after_1 = tf_env.step(action)
-# Four of these got a tf.reshape() applied to them. Coming out of the 
-#    environment, they were represented as 1-dimensional tensors with
-#    length of 1, except the observation, which was a 2-d tensor of
-#    shape (1, 4), so it also had an extra dimension more than needed.
-#    If I submitted a single trajectory as a batch, this was great,
-#    and the build went through because it treated this dim as the 
-#    batch dimension.  But, when I tried to build a batch, this acted like
-#    a second batch dimension, which doesn't make sense, so it caused a
-#    crash. So, I needed to remove a dimension, making them into 0-dim tensors
-#    instead, then the batch dimension is the only dimension provided.
-#    It's possible that I could have rebuilt the TensorSpec arguments in the
-#    agent.collect_data_spec to include that dimenstion, but I don't know if
-#    that would have caused other problems elsewhere.
-# Also note: When I tried to submit a single trajectory as a batch, with no
-#    batch dimension, I needed to make the StepTypes into 1-d tensors, because
-#    right now they are 0-d np.ndarrays.
-# print(action)
-# print(tf.reshape(action, ()))
-# print(before.observation)
-# print(tf.reshape(before.observation, (4)))
-traj_1 = trajectories.Trajectory(
-    trajectories.StepType.FIRST,
-    tf.reshape(before.observation, (4)),
-    tf.reshape(action, ()),
-    (),
-    trajectories.StepType.MID,
-    tf.reshape(after_1.reward, ()),
-    tf.reshape(after_1.discount, ()),
-)
-print(traj_1)
-# c.f. https://www.tensorflow.org/agents/tutorials/5_replay_buffers_tutorial#writing_to_the_buffer
-batch_1 = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj_1)
-# print(batch_1)
-# print(agent.collect_data_spec)
-replay_buffer.add_batch(batch_1)
-
-action = tf.constant([random.randrange(0,2)], dtype=tf.int64)
-after_2 = tf_env.step(action)
-traj_2 = trajectories.Trajectory(
-    trajectories.StepType.MID,
-    tf.reshape(after_1.observation, (4)),
-    tf.reshape(action, ()),
-    (),
-    trajectories.StepType.MID,
-    tf.reshape(after_2.reward, ()),
-    tf.reshape(after_2.discount, ()),
-)
-print(traj_2)
-batch_2 = tf.nest.map_structure(lambda t: tf.stack([t] * 32), traj_2)
-replay_buffer.add_batch(batch_1)
+# driver = DynamicStepDriver(
+#     tf_env,
+#     q_policy,
+#     observers = [observer],
+#     num_steps = 1, # Following example, not sure why/how to pick
+# )
 
 # 7. Dataset
 dataset = replay_buffer.as_dataset(
-    sample_batch_size = 32, # Matching value chosen earlier
+    sample_batch_size = 64, # Matching value chosen earlier
     num_steps = 2, 
-    single_deterministic_pass = False, # following warning
-)
-
-# This iterator produces batches of data as the network trains.
+    num_parallel_calls = 10,
+).prefetch(3)
 iterator = iter(dataset)
+agent.train = common.function(agent.train)
+agent.train_step_counter.assign(0)
 
-# So, now, after all that jazz, we have two batches that have no 
-#    decision-making policy. But we also know a lot more about how to 
-#    make batches.  That means that the next() function can finally be 
-#    called without throwing an error!
-trajectories = next(iterator)
-print(trajectories)
+model.summary()
+print(compute_avg_return(eval_env, eval_policy))
 
-# for _ in range(10):
+# # print(q_policy.policy_step_spec)
+# step_0 = tf_env.reset()
+# # print(f"Reset: {step}")
+# step_1, _ = driver.run()
+# # print(f"Next: {next_step}")
+# step_2, _ = driver.run()
+# traj = Trajectory(
+#     tf.reshape([step_0.step_type, step_1.step_type], (1,2)),
+#     tf.reshape([step_0.observation, step_1.observation], [1,2,4]),
+#     tf.reshape(tf.constant([
+#             q_policy.action(step_0).action.numpy()[0], 
+#             q_policy.action(step_1).action.numpy()[0]
+#             ], 
+#             dtype=tf.int64), (1,2)),
+#     (),
+#     tf.reshape([step_1.step_type, step_2.step_type], (1,2)),
+#     tf.reshape([step_1.reward, step_2.reward], (1,2)),
+#     tf.reshape([step_1.discount, step_2.discount], (1,2)),
+# )
+# # print(f"Initial Trajectory: {traj}")
 
+for _ in range(100):
+    time_step = tf_env.current_time_step()
+    action_step = collect_policy.action(time_step)
+    next_time_step = tf_env.current_time_step()
+    traj = trajectories.from_transition(time_step, action_step, next_time_step)
+    replay_buffer.add_batch(traj)
+
+losses = []
+for i in range(50000):
+    time_step = tf_env.current_time_step()
+    action_step = collect_policy.action(time_step)
+    next_time_step = tf_env.current_time_step()
+    traj = trajectories.from_transition(time_step, action_step, next_time_step)
+    replay_buffer.add_batch(traj)
+    experience, _ = next(iterator)
+    loss = agent.train(experience)
+    losses.append(loss.loss * 10000)
+    while len(losses) > 500:
+        losses.pop(0)
+    # print(loss)
+    if i % 100 == 0:
+        if len(losses) > 0:
+            loss = sum(losses) / len(losses)
+        print(f"{i:5} {loss:.8f}", flush=True)
+    if i % 1000 == 0:
+        print(compute_avg_return(eval_env, eval_policy))
+
+print()
+
+print(compute_avg_return(eval_env, eval_policy))
+
+# total = 0
+# length = 20
+# for i in range(length):
+#     step = tf_env.reset()
+#     img = py_env.render()
+#     cv2.imshow(f"{i}", img)
+#     cv2.waitKey(0)
+#     j = 0
+#     while step.step_type < 2:
+#         step, _ = driver.run()
+#         j += 1
+#         img = py_env.render()
+#         cv2.imshow(f"{i}", img)
+#         cv2.waitKey(1)
+#     print(i, j, end = " | ", flush=True)
+#     total += j
+# print(total/length)
+
+# Taken from training loop
+    # step_0 = step_1
+    # step_1 = step_2
+    # step_2, pol_info = driver.run()
+    # # print(f"Policy {i}: {pol_info}")
+    # traj = Trajectory(
+    #     tf.reshape([step_0.step_type, step_1.step_type], (1,2)),
+    #     tf.reshape([step_0.observation, step_1.observation], [1,2,4]),
+    #     tf.reshape(tf.constant([
+    #             q_policy.action(step_0).action.numpy()[0], 
+    #             q_policy.action(step_1).action.numpy()[0]
+    #             ], 
+    #             dtype=tf.int64), (1,2)),
+    #     (),
+    #     tf.reshape([step_1.step_type, step_2.step_type], (1,2)),
+    #     tf.reshape([step_1.reward, step_2.reward], (1,2)),
+    #     tf.reshape([step_1.discount, step_2.discount], (1,2)),
+    # )
+    # print(traj)
+    # print(traj.observation)
